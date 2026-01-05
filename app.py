@@ -3,7 +3,7 @@ import pandas as pd
 import yfinance as yf
 
 # ======================
-# 页面
+# 页面设置
 # ======================
 st.set_page_config(page_title="板块ETF短线系统（封版）", layout="centered")
 st.title("📊 板块 ETF 短线交易系统（收盘版 · 封版）")
@@ -24,7 +24,6 @@ def load_data(code, period="3mo"):
         return df
     except:
         return None
-
 
 # ======================
 # 技术指标
@@ -49,9 +48,8 @@ def add_indicators(df):
 
     return df
 
-
 # ======================
-# 大盘（最高优先级）
+# 大盘过滤器（最高优先级）
 # ======================
 def load_market():
     for name, code in [
@@ -63,7 +61,6 @@ def load_market():
             return name, add_indicators(df)
     return None, None
 
-
 st.subheader("📈 今日市场结论")
 market_name, market_df = load_market()
 
@@ -74,7 +71,7 @@ if market_df is None:
 m = market_df.iloc[-1]
 m5 = market_df.iloc[-6]
 
-market_ok = (
+market_ok = bool(
     float(m["close"]) > float(m["ma20"])
     and float(m["ma20"]) >= float(m5["ma20"])
 )
@@ -84,13 +81,12 @@ if market_ok:
 else:
     st.error(f"🔴 大盘转弱，禁止新开仓（{market_name}）")
 
-market_20d_return = (
-    market_df["close"].iloc[-1] / market_df["close"].iloc[-21] - 1
-) * 100
-
+market_20d_return = float(
+    (market_df["close"].iloc[-1] / market_df["close"].iloc[-21] - 1) * 100
+)
 
 # ======================
-# 板块 ETF 池（最终封版）
+# 板块 ETF 池（最终）
 # ======================
 ETF_POOL = {
     "军工": "512660.SS",
@@ -114,30 +110,32 @@ for name, code in ETF_POOL.items():
 
     l = df.iloc[-1]
     p = df.iloc[-2]
-    p2 = df.iloc[-3]
     p20 = df.iloc[-21]
 
     price = float(l["close"])
     ma20 = float(l["ma20"])
 
     # ========= 板块强弱 =========
-    etf_20d_return = (price / float(p20["close"]) - 1) * 100
-    strong_block = price > ma20 and etf_20d_return > market_20d_return
+    etf_20d_return = float((price / float(p20["close"]) - 1) * 100)
+    strong_block = bool(price > ma20 and etf_20d_return > market_20d_return)
 
     # ========= 短线行为 =========
-    macd_ok = float(l["macd"]) > float(l["signal"])
-    macd_dead = float(l["macd"]) < float(l["signal"]) and float(p["macd"]) >= float(p["signal"])
+    macd_ok = bool(float(l["macd"]) > float(l["signal"]))
+    macd_dead = bool(
+        float(l["macd"]) < float(l["signal"])
+        and float(p["macd"]) >= float(p["signal"])
+    )
 
-    vol_up = float(l["Volume"]) > float(l["vol_ma5"])
-    price_up = price > float(p["close"])
-    vol_down_break = price < float(p["close"]) and vol_up
+    vol_up = bool(float(l["Volume"]) > float(l["vol_ma5"]))
+    price_up = bool(price > float(p["close"]))
+    vol_down_break = bool(price < float(p["close"]) and vol_up)
 
     k = float(l["kdj_k"])
-    k_overheat = k > 85
-    k_dead = k > 80 and k < float(p["kdj_k"])
+    k_overheat = bool(k > 85)
+    k_dead = bool(k > 80 and k < float(p["kdj_k"]))
 
     # ========= 当日买入条件 =========
-    today_buy = (
+    today_buy = bool(
         market_ok
         and strong_block
         and macd_ok
@@ -147,15 +145,15 @@ for name, code in ETF_POOL.items():
     )
 
     # ========= 连续 2 天确认 =========
-    yesterday_buy = (
+    yesterday_buy = bool(
         float(p["macd"]) > float(p["signal"])
         and float(p["close"]) > float(p["ma20"])
         and float(p["kdj_k"]) <= 85
     )
 
-    allow_buy = today_buy and yesterday_buy
+    allow_buy = bool(today_buy and yesterday_buy)
 
-    # ========= 最终行为 =========
+    # ========= 最终操作 =========
     if not market_ok:
         action = "🔴 卖出" if (price < ma20 or macd_dead) else "🟡 等待"
     else:
@@ -171,14 +169,12 @@ for name, code in ETF_POOL.items():
         "action": action
     })
 
-
 # ======================
 # 最终输出
 # ======================
 st.subheader("🧠 今日执行结论")
 
 buy_list = [s["name"] for s in signals if s["action"] == "🟢 买入"]
-sell_list = [s["name"] for s in signals if s["action"] == "🔴 卖出"]
 
 if not market_ok:
     st.markdown("### 🔴 今日策略：**空仓 / 只处理卖出**")
