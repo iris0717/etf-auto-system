@@ -35,12 +35,12 @@ for name, code in ETF_MAP.items():
     df["ma20"] = df["close"].rolling(20).mean()
 
     latest = df.iloc[-1]
-price = float(latest["close"])
-ma20 = float(latest["ma20"])
+    price = float(latest["close"])
+    ma20 = float(latest["ma20"])
 
-if pd.isna(ma20):
-    st.warning("⚠️ 数据不足 20 天")
-    continue
+    if pd.isna(ma20):
+        st.warning("⚠️ 数据不足 20 天")
+        continue
 
     if price > ma20:
         st.success(f"🟢 符合条件｜现价 {price:.2f} ＞ MA20 {ma20:.2f}")
