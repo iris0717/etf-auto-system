@@ -2,14 +2,13 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 from datetime import datetime, time
+import numpy as np
 
 # ======================
 # 15 分钟自动刷新（官方方式）
 # ======================
 st.markdown(
-    """
-    <meta http-equiv="refresh" content="900">
-    """,
+    "<meta http-equiv='refresh' content='900'>",
     unsafe_allow_html=True
 )
 
@@ -30,32 +29,20 @@ st.set_page_config(
 st.title("📊 板块 ETF 短线交易系统（终极版）")
 
 if is_close_mode:
-    st.warning("🕒 当前为 **14:45 收盘确认模式**（信号可执行）")
+    st.warning("🕒 当前为 **14:45 收盘确认模式（可执行）**")
 else:
-    st.info("ℹ️ 当前为盘中观察模式（仅供参考，不建议下单）")
+    st.info("ℹ️ 盘中观察模式（不建议下单）")
 
 # ======================
 # 数据获取
 # ======================
 def load_data(code, period="3mo"):
     try:
-        df = yf.download(
-            code,
-            period=period,
-            interval="1d",
-            progress=False
-        )
+        df = yf.download(code, period=period, interval="1d", progress=False)
         if df is None or df.empty:
             return None
-
         df = df.reset_index()
-
-        if "Close" in df.columns:
-            df.rename(columns={"Close": "close"}, inplace=True)
-
-        if "close" not in df.columns:
-            return None
-
+        df.rename(columns={"Close": "close"}, inplace=True)
         return df
     except:
         return None
@@ -65,12 +52,10 @@ def load_data(code, period="3mo"):
 # ======================
 def add_indicators(df):
     df["ma20"] = df["close"].rolling(20).mean()
-
     df["ema12"] = df["close"].ewm(span=12, adjust=False).mean()
     df["ema26"] = df["close"].ewm(span=26, adjust=False).mean()
     df["macd"] = df["ema12"] - df["ema26"]
     df["signal"] = df["macd"].ewm(span=9, adjust=False).mean()
-
     df["vol_ma5"] = df["Volume"].rolling(5).mean()
     df["ma20_slope"] = df["ma20"] - df["ma20"].shift(5)
 
@@ -82,13 +67,10 @@ def add_indicators(df):
     return df
 
 # ======================
-# 大盘过滤器
+# 大盘过滤
 # ======================
 def load_market():
-    for name, code in [
-        ("沪深300", "000300.SS"),
-        ("上证指数", "000001.SS")
-    ]:
+    for name, code in [("沪深300", "000300.SS"), ("上证指数", "000001.SS")]:
         df = load_data(code)
         if df is not None and len(df) >= 30:
             return name, add_indicators(df)
@@ -97,31 +79,26 @@ def load_market():
 market_name, market_df = load_market()
 
 if market_df is None:
-    st.error("❌ 大盘数据获取失败，今日不交易")
+    st.error("❌ 大盘数据失败，停止运行")
     st.stop()
 
 m = market_df.iloc[-1]
 m5 = market_df.iloc[-6]
 
-market_ok = (
+market_ok = bool(
     float(m["close"]) > float(m["ma20"])
     and float(m["ma20"]) >= float(m5["ma20"])
 )
 
-market_20d_return = (
-    market_df["close"].iloc[-1]
-    / market_df["close"].iloc[-21]
-    - 1
-) * 100
+market_20d_return = float(
+    (market_df["close"].iloc[-1] / market_df["close"].iloc[-21] - 1) * 100
+)
 
 st.subheader("📈 大盘状态")
-if market_ok:
-    st.success(f"🟢 {market_name}：允许交易")
-else:
-    st.error(f"🔴 {market_name}：禁止新开仓")
+st.success("🟢 允许交易" if market_ok else "🔴 禁止新开仓")
 
 # ======================
-# ETF 池（含你新增的）
+# ETF 池
 # ======================
 ETF_POOL = {
     "军工": "512660.SS",
@@ -132,8 +109,8 @@ ETF_POOL = {
     "医药": "512010.SS",
     "科创成长": "159218.SZ",
     "机器人": "562500.SS",
-    "主题ETF-A": "159732.SZ",
-    "主题ETF-B": "515880.SS",
+    "主题A": "159732.SZ",
+    "主题B": "515880.SS",
 }
 
 results = []
@@ -143,7 +120,6 @@ results = []
 # ======================
 for name, code in ETF_POOL.items():
     df = load_data(code)
-
     if df is None or len(df) < 30:
         continue
 
@@ -153,16 +129,18 @@ for name, code in ETF_POOL.items():
     p = df.iloc[-2]
     p20 = df.iloc[-21]
 
-    price = float(l["close"])
-    ma20 = float(l["ma20"])
+    try:
+        price = float(l["close"])
+        ma20 = float(l["ma20"])
+        ma20_slope = float(l["ma20_slope"])
+        etf_20d_return = float((price / float(p20["close"]) - 1) * 100)
+    except:
+        continue
 
-    etf_20d_return = (price / float(p20["close"]) - 1) * 100
+    if np.isnan(ma20) or np.isnan(ma20_slope):
+        continue
 
-    strength = (
-        etf_20d_return
-        - market_20d_return
-        + float(l["ma20_slope"])
-    )
+    strength = etf_20d_return - market_20d_return + ma20_slope
 
     macd_ok = float(l["macd"]) > float(l["signal"])
     macd_keep = float(p["macd"]) > float(p["signal"])
@@ -193,22 +171,23 @@ for name, code in ETF_POOL.items():
     })
 
 # ======================
-# 结果展示
+# 结果展示（再保险一次）
 # ======================
 df_res = pd.DataFrame(results)
-df_res = df_res.sort_values("强度", ascending=False)
 
-st.subheader("🔥 Top 3 强度板块 ETF")
+if df_res.empty:
+    st.warning("⚠️ 今日无符合条件的 ETF")
+    st.stop()
+
+df_res["强度"] = pd.to_numeric(df_res["强度"], errors="coerce")
+df_res = df_res.dropna(subset=["强度"])
+df_res = df_res.sort_values(by="强度", ascending=False)
+
+st.subheader("🔥 Top 3 强度 ETF")
 st.dataframe(df_res.head(3), use_container_width=True)
 
 st.subheader("📋 全部 ETF 信号")
 st.dataframe(df_res, use_container_width=True)
 
-# ======================
-# 实盘统计页（结构已预留）
-# ======================
-st.subheader("📊 实盘胜率统计（封版结构）")
-st.info(
-    "规则：14:45 买入 → 下一次出现『卖出 / 空仓』信号视为一笔交易\n\n"
-    "👉 后续可自动统计胜率、平均收益"
-)
+st.subheader("📊 实盘统计（结构已预留）")
+st.info("买入 → 下一次卖出，自动统计胜率（后续扩展）")
