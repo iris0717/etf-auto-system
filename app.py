@@ -1,22 +1,49 @@
 import streamlit as st
 import pandas as pd
+import yfinance as yf
 
-st.set_page_config(page_title="ETF 自动系统", layout="centered")
+st.set_page_config(page_title="ETF 自动判断系统", layout="centered")
 
-st.title("📊 ETF 自动判断系统（稳定版）")
+st.title("📊 ETF 自动判断系统（真实数据版）")
 
-# === 模拟数据（保证不报错）===
-data = {
-    "close": [1.00, 1.02, 1.01, 1.03, 1.05, 1.06, 1.07,
-              1.06, 1.08, 1.10, 1.12, 1.11, 1.13,
-              1.15, 1.14, 1.16, 1.18, 1.17, 1.19, 1.20]
+# === ETF 对应关系（A股 ETF → Yahoo 代码）===
+ETF_MAP = {
+    "半导体设备 ETF（159516）": "159516.SZ",
+    "证券 ETF（512000）": "512000.SS",
+    "机器人 ETF（159770）": "159770.SZ",
 }
 
-df = pd.DataFrame(data)
+def load_data(code):
+    try:
+        df = yf.download(code, period="3mo", interval="1d", progress=False)
+        if df.empty:
+            return None
+        df = df.reset_index()
+        df.rename(columns={"Close": "close"}, inplace=True)
+        return df
+    except Exception:
+        return None
 
-df["ma20"] = df["close"].rolling(20).mean()
+for name, code in ETF_MAP.items():
+    st.subheader(name)
+    df = load_data(code)
 
-st.success("🟢 系统运行正常（测试数据）")
+    if df is None or "close" not in df.columns:
+        st.warning("⚠️ 数据获取失败，暂无法判断")
+        continue
 
-st.write("最新收盘价：", df["close"].iloc[-1])
-st.write("20 日均线：", round(df["ma20"].iloc[-1], 3))
+    df["ma20"] = df["close"].rolling(20).mean()
+
+    latest = df.iloc[-1]
+    price = latest["close"]
+    ma20 = latest["ma20"]
+
+    if pd.isna(ma20):
+        st.warning("⚠️ 数据不足 20 天")
+        continue
+
+    if price > ma20:
+        st.success(f"🟢 符合条件｜现价 {price:.2f} ＞ MA20 {ma20:.2f}")
+        st.info("建议试仓：30% ｜ 止损 -4% ｜ 目标 +6% / +10%")
+    else:
+        st.warning(f"🔴 不符合条件｜现价 {price:.2f} ＜ MA20 {ma20:.2f}")
