@@ -38,7 +38,7 @@ for name, code in ETF_MAP.items():
     price = latest["close"]
     ma20 = latest["ma20"]
 
-    if pd.isna(ma20):
+if pd.isna(ma20):
         st.warning("⚠️ 数据不足 20 天")
         continue
 
