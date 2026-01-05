@@ -2,12 +2,18 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 
-st.set_page_config(page_title="ETF 自动交易系统", layout="centered")
+# ======================
+# 页面设置（必须最前）
+# ======================
+st.set_page_config(
+    page_title="ETF 自动交易系统（Yahoo 版）",
+    layout="centered"
+)
 
 st.title("📊 ETF 自动交易系统（Yahoo 版）")
 
 # ======================
-# 工具函数
+# 通用数据获取（兜底）
 # ======================
 def load_data(code, period="3mo"):
     try:
@@ -17,7 +23,7 @@ def load_data(code, period="3mo"):
 
         df = df.reset_index()
 
-        # 兼容 Yahoo 不同列名
+        # 统一收盘价列名
         if "Close" in df.columns:
             df.rename(columns={"Close": "close"}, inplace=True)
         elif "close" not in df.columns:
@@ -27,18 +33,39 @@ def load_data(code, period="3mo"):
     except Exception:
         return None
 
+
 def calc_ma20(df):
     df["ma20"] = df["close"].rolling(20).mean()
     return df
+
+
+# ======================
+# 大盘指数自动兜底
+# ======================
+def load_market_index():
+    candidates = [
+        ("沪深300指数", "000300.SS"),
+        ("上证指数", "000001.SS"),
+        ("恒生指数", "^HSI"),
+    ]
+
+    for name, code in candidates:
+        df = load_data(code)
+        if df is not None and len(df) >= 25:
+            return name, df
+
+    return None, None
+
 
 # ======================
 # 大盘环境判断
 # ======================
 st.header("📈 大盘环境")
 
-index_df = load_data("000300.SS")  # 沪深300指数（稳定）
+market_name, index_df = load_market_index()
+
 if index_df is None:
-    st.error("❌ 大盘数据获取失败")
+    st.error("❌ 大盘数据全部获取失败（Yahoo 当前不可用）")
     st.stop()
 
 index_df = calc_ma20(index_df)
@@ -56,12 +83,13 @@ market_ok = (
 )
 
 if market_ok:
-    st.success("🟢 大盘环境：允许建仓")
+    st.success(f"🟢 大盘环境：允许建仓（参考：{market_name}）")
 else:
-    st.error("🔴 大盘环境：禁止建仓")
+    st.error(f"🔴 大盘环境：禁止建仓（参考：{market_name}）")
+
 
 # ======================
-# ETF 列表（Yahoo 可用）
+# ETF 判断区域
 # ======================
 st.header("🔥 ETF 建仓判断")
 
@@ -73,23 +101,20 @@ ETF_LIST = {
 
 for name, code in ETF_LIST.items():
     st.subheader(name)
-    df = load_data(code)
 
-    if df is None:
-        st.warning("⚠️ 数据获取失败")
+    df = load_data(code)
+    if df is None or len(df) < 25:
+        st.warning("⚠️ 数据获取失败 / 数据不足")
         continue
 
     df = calc_ma20(df)
+
     latest = df.iloc[-1]
     prev = df.iloc[-2]
 
     price = float(latest["close"])
     ma20 = float(latest["ma20"])
     ma20_prev = float(prev["ma20"])
-
-    if pd.isna(ma20):
-        st.warning("⚠️ 数据不足")
-        continue
 
     etf_ok = (
         market_ok
@@ -99,6 +124,6 @@ for name, code in ETF_LIST.items():
 
     if etf_ok:
         st.success("✅ 可建仓")
-        st.info("建议仓位：30% ｜ 止损 -4% 或跌破 MA20 ｜ 目标 +6% / +10%")
+        st.info("建议仓位：30%｜止损：-4% 或跌破 MA20｜止盈：+6% / +10%")
     else:
         st.warning("❌ 不符合建仓条件")
