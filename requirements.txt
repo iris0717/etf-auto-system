@@ -1,3 +1,7 @@
 streamlit
 akshare
 pandas
+numpy
+requests
+lxml
+beautifulsoup4
