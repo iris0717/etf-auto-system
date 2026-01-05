@@ -36,9 +36,13 @@ index_df = calc_ma20(index_df)
 idx_latest = index_df.iloc[-1]
 idx_prev = index_df.iloc[-2]
 
+idx_close = float(idx_latest["close"])
+idx_ma20 = float(idx_latest["ma20"])
+idx_ma20_prev = float(idx_prev["ma20"])
+
 market_ok = (
-    idx_latest["close"] > idx_latest["ma20"]
-    and idx_latest["ma20"] >= idx_prev["ma20"]
+    idx_close > idx_ma20
+    and idx_ma20 >= idx_ma20_prev
 )
 
 if market_ok:
