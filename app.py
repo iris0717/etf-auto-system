@@ -10,12 +10,19 @@ st.title("📊 ETF 自动交易系统（Yahoo 版）")
 # 工具函数
 # ======================
 def load_data(code, period="3mo"):
-    df = yf.download(code, period=period, interval="1d", progress=False)
-    if df.empty:
+    try:
+        df = yf.download(code, period=period, interval="1d", progress=False)
+        if df is None or df.empty:
+            return None
+        df = df.reset_index()
+
+        # 兼容 Close / close
+        if "Close" in df.columns:
+            df.rename(columns={"Close": "close"}, inplace=True)
+
+        return df
+    except Exception as e:
         return None
-    df = df.reset_index()
-    df.rename(columns={"Close": "close"}, inplace=True)
-    return df
 
 def calc_ma20(df):
     df["ma20"] = df["close"].rolling(20).mean()
@@ -26,7 +33,7 @@ def calc_ma20(df):
 # ======================
 st.header("📈 大盘环境")
 
-index_df = load_data("510300.SS")
+index_df = load_data("000300.SS")
 if index_df is None:
     st.error("❌ 大盘数据获取失败")
     st.stop()
