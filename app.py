@@ -14,14 +14,17 @@ def load_data(code, period="3mo"):
         df = yf.download(code, period=period, interval="1d", progress=False)
         if df is None or df.empty:
             return None
+
         df = df.reset_index()
 
-        # 兼容 Close / close
+        # 兼容 Yahoo 不同列名
         if "Close" in df.columns:
             df.rename(columns={"Close": "close"}, inplace=True)
+        elif "close" not in df.columns:
+            return None
 
         return df
-    except Exception as e:
+    except Exception:
         return None
 
 def calc_ma20(df):
@@ -33,7 +36,7 @@ def calc_ma20(df):
 # ======================
 st.header("📈 大盘环境")
 
-index_df = load_data("000300.SS")
+index_df = load_data("000300.SS")  # 沪深300指数（稳定）
 if index_df is None:
     st.error("❌ 大盘数据获取失败")
     st.stop()
