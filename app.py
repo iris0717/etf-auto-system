@@ -1,143 +1,195 @@
 import streamlit as st
-import tushare as ts
 import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
+import yfinance as yf
 
-# ===============================
-# 基础配置
-# ===============================
-st.set_page_config(page_title="ETF 板块短线系统", layout="centered")
+# ======================
+# 页面设置
+# ======================
+st.set_page_config(page_title="板块ETF短线系统（封版）", layout="centered")
+st.title("📊 板块 ETF 短线交易系统（收盘版 · 封版）")
 
-# TuShare 初始化
-ts.set_token(st.secrets["TUSHARE_TOKEN"])
-pro = ts.pro_api()
-
-# ===============================
-# 工具函数
-# ===============================
-def calc_macd(df):
-    exp1 = df["close"].ewm(span=12, adjust=False).mean()
-    exp2 = df["close"].ewm(span=26, adjust=False).mean()
-    df["macd"] = exp1 - exp2
-    df["signal"] = df["macd"].ewm(span=9, adjust=False).mean()
-    return df
-
-def calc_kdj(df, n=9):
-    low_n = df["low"].rolling(n).min()
-    high_n = df["high"].rolling(n).max()
-    rsv = (df["close"] - low_n) / (high_n - low_n) * 100
-    df["K"] = rsv.ewm(com=2).mean()
-    df["D"] = df["K"].ewm(com=2).mean()
-    df["J"] = 3 * df["K"] - 2 * df["D"]
-    return df
-
-def get_etf_daily(ts_code):
-    df = pro.fund_daily(
-        ts_code=ts_code,
-        start_date=(datetime.now() - timedelta(days=120)).strftime("%Y%m%d")
-    )
-    if df is None or len(df) < 30:
+# ======================
+# 数据获取
+# ======================
+def load_data(code, period="3mo"):
+    try:
+        df = yf.download(code, period=period, interval="1d", progress=False)
+        if df is None or df.empty:
+            return None
+        df = df.reset_index()
+        if "Close" in df.columns:
+            df.rename(columns={"Close": "close"}, inplace=True)
+        if "close" not in df.columns:
+            return None
+        return df
+    except:
         return None
 
-    df = df.sort_values("trade_date")
+# ======================
+# 技术指标
+# ======================
+def add_indicators(df):
     df["ma20"] = df["close"].rolling(20).mean()
-    df["vol_ma5"] = df["vol"].rolling(5).mean()
-    df = calc_macd(df)
-    df = calc_kdj(df)
+
+    # MACD
+    df["ema12"] = df["close"].ewm(span=12, adjust=False).mean()
+    df["ema26"] = df["close"].ewm(span=26, adjust=False).mean()
+    df["macd"] = df["ema12"] - df["ema26"]
+    df["signal"] = df["macd"].ewm(span=9, adjust=False).mean()
+
+    # 成交量
+    df["vol_ma5"] = df["Volume"].rolling(5).mean()
+
+    # KDJ（只用 K）
+    low_n = df["close"].rolling(9).min()
+    high_n = df["close"].rolling(9).max()
+    rsv = (df["close"] - low_n) / (high_n - low_n) * 100
+    df["kdj_k"] = rsv.ewm(com=2).mean()
+
     return df
 
-def signal_judge(df):
-    l = df.iloc[-1]
+# ======================
+# 大盘过滤器（最高优先级）
+# ======================
+def load_market():
+    for name, code in [
+        ("沪深300", "000300.SS"),
+        ("上证指数", "000001.SS"),
+    ]:
+        df = load_data(code)
+        if df is not None and len(df) >= 30:
+            return name, add_indicators(df)
+    return None, None
 
-    cond_price = l["close"] > l["ma20"]
-    cond_macd = l["macd"] > l["signal"]
-    cond_kdj = l["K"] > l["D"] and l["K"] < 80
-    cond_vol = l["vol"] > l["vol_ma5"]
+st.subheader("📈 今日市场结论")
+market_name, market_df = load_market()
 
-    score = sum([cond_price, cond_macd, cond_kdj, cond_vol])
+if market_df is None:
+    st.error("❌ 大盘数据不可用")
+    st.stop()
 
-    if score >= 3:
-        return "🟢 买入"
-    elif score == 2:
-        return "🟡 等待"
-    else:
-        return "🔴 观望"
+m = market_df.iloc[-1]
+m5 = market_df.iloc[-6]
 
-# ===============================
-# 大盘过滤（上证指数）
-# ===============================
-def market_ok():
-    idx = pro.index_daily(
-        ts_code="000001.SH",
-        start_date=(datetime.now() - timedelta(days=120)).strftime("%Y%m%d")
-    )
-    idx = idx.sort_values("trade_date")
-    idx["ma20"] = idx["close"].rolling(20).mean()
+market_ok = bool(
+    float(m["close"]) > float(m["ma20"])
+    and float(m["ma20"]) >= float(m5["ma20"])
+)
 
-    l = idx.iloc[-1]
-    return l["close"] > l["ma20"]
+if market_ok:
+    st.success(f"🟢 大盘允许交易（{market_name}）")
+else:
+    st.error(f"🔴 大盘转弱，禁止新开仓（{market_name}）")
 
-# ===============================
-# ETF 池（你现在用的）
-# ===============================
+market_20d_return = float(
+    (market_df["close"].iloc[-1] / market_df["close"].iloc[-21] - 1) * 100
+)
+
+# ======================
+# 板块 ETF 池（最终）
+# ======================
 ETF_POOL = {
-    "159218": "光伏ETF",
-    "512660": "军工ETF",
-    "515880": "科技ETF",
-    "159732": "新能源车ETF",
-    "159516": "芯片ETF",
-    "562500": "计算机ETF"
+    "军工": "512660.SS",
+    "半导体": "159995.SZ",
+    "计算机": "159998.SZ",
+    "人工智能": "159819.SZ",
+    "新能源": "159806.SZ",
+    "医药": "512010.SS",
+    "科创成长": "159218.SZ",
+    "机器人": "562500.SS",
 }
 
-# ===============================
-# 页面展示
-# ===============================
-st.title("📊 A股板块 ETF 短线系统（收盘版）")
+signals = []
 
-market_status = market_ok()
-st.subheader("📈 大盘环境")
-st.write("🟢 允许交易" if market_status else "🔴 大盘偏弱，谨慎开仓")
-
-results = []
-
-for code, name in ETF_POOL.items():
-    df = get_etf_daily(code)
-    if df is None:
+for name, code in ETF_POOL.items():
+    df = load_data(code)
+    if df is None or len(df) < 30:
         continue
 
-    sig = signal_judge(df)
-    l = df.iloc[-1]
+    df = add_indicators(df)
 
-    strength = (
-        (l["close"] / l["ma20"] - 1) * 100
-        + (l["macd"] - l["signal"]) * 10
+    l = df.iloc[-1]
+    p = df.iloc[-2]
+    p20 = df.iloc[-21]
+
+    price = float(l["close"])
+    ma20 = float(l["ma20"])
+
+    # ========= 板块强弱 =========
+    etf_20d_return = float((price / float(p20["close"]) - 1) * 100)
+    strong_block = bool(price > ma20 and etf_20d_return > market_20d_return)
+
+    # ========= 短线行为 =========
+    macd_ok = bool(float(l["macd"]) > float(l["signal"]))
+    macd_dead = bool(
+        float(l["macd"]) < float(l["signal"])
+        and float(p["macd"]) >= float(p["signal"])
     )
 
-    results.append({
-        "ETF": name,
-        "代码": code,
-        "信号": sig,
-        "强度": round(strength, 2)
+    vol_up = bool(float(l["Volume"]) > float(l["vol_ma5"]))
+    price_up = bool(price > float(p["close"]))
+    vol_down_break = bool(price < float(p["close"]) and vol_up)
+
+    k = float(l["kdj_k"])
+    k_overheat = bool(k > 85)
+    k_dead = bool(k > 80 and k < float(p["kdj_k"]))
+
+    # ========= 当日买入条件 =========
+    today_buy = bool(
+        market_ok
+        and strong_block
+        and macd_ok
+        and not k_overheat
+        and price_up
+        and vol_up
+    )
+
+    # ========= 连续 2 天确认 =========
+    yesterday_buy = bool(
+        float(p["macd"]) > float(p["signal"])
+        and float(p["close"]) > float(p["ma20"])
+        and float(p["kdj_k"]) <= 85
+    )
+
+    allow_buy = bool(today_buy and yesterday_buy)
+
+    # ========= 最终操作 =========
+    if not market_ok:
+        action = "🔴 卖出" if (price < ma20 or macd_dead) else "🟡 等待"
+    else:
+        if macd_dead or vol_down_break or price < ma20 or k_dead:
+            action = "🔴 卖出"
+        elif allow_buy:
+            action = "🟢 买入"
+        else:
+            action = "🟡 等待"
+
+    signals.append({
+        "name": name,
+        "action": action
     })
 
-df_res = pd.DataFrame(results)
+# ======================
+# 最终输出
+# ======================
+st.subheader("🧠 今日执行结论")
 
-if not df_res.empty:
-    df_res = df_res.sort_values("强度", ascending=False)
+buy_list = [s["name"] for s in signals if s["action"] == "🟢 买入"]
 
-    st.subheader("🔥 当前板块强度排序")
-    st.dataframe(df_res, use_container_width=True)
-
-    st.subheader("🎯 今日执行建议")
-    if market_status:
-        top = df_res.iloc[0]
-        st.success(
-            f"优先关注：{top['ETF']}（{top['代码']}）\n"
-            f"信号：{top['信号']}｜建议仓位：30%~40%"
-        )
-    else:
-        st.warning("大盘不支持开新仓，仅观察")
-
+if not market_ok:
+    st.markdown("### 🔴 今日策略：**空仓 / 只处理卖出**")
+elif buy_list:
+    st.markdown(f"### 🟢 今日策略：**允许买入 → {', '.join(buy_list)}**")
 else:
-    st.warning("暂无有效数据")
+    st.markdown("### 🟡 今日策略：**等待，不新开仓**")
+
+st.markdown("---")
+st.subheader("📋 板块 ETF 执行清单")
+
+for s in signals:
+    st.markdown(f"""
+**{s['name']}**  
+操作：**{s['action']}**  
+仓位：{'20–30%' if s['action']=='🟢 买入' else '0%'}  
+止损：-4% 或 跌破 MA20  
+""")
