@@ -1,4 +1,3 @@
-st.write("Token loaded:", "TUSHARE_TOKEN" in st.secrets)
 import streamlit as st
 import pandas as pd
 import numpy as np
