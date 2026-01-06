@@ -1,19 +1,22 @@
 import streamlit as st
 import pandas as pd
-import yfinance as yf
-from datetime import datetime, time
 import numpy as np
+import tushare as ts
+from datetime import datetime, time
+
+# ======================
+# TuShare 初始化（f4671fb19df2327e5d5348cd1bf83dfa5a5b5e50a9be775fd9c3411c）
+# ======================
+ts.set_token(st.secrets["TUSHARE_TOKEN"])
+pro = ts.pro_api()
 
 # ======================
 # 15 分钟自动刷新（官方方式）
 # ======================
-st.markdown(
-    "<meta http-equiv='refresh' content='900'>",
-    unsafe_allow_html=True
-)
+st.markdown("<meta http-equiv='refresh' content='900'>", unsafe_allow_html=True)
 
 # ======================
-# 时间判断（14:45 收盘模式）
+# 时间判断（14:45 收盘确认）
 # ======================
 now = datetime.now().time()
 is_close_mode = now >= time(14, 45)
@@ -21,28 +24,25 @@ is_close_mode = now >= time(14, 45)
 # ======================
 # 页面设置
 # ======================
-st.set_page_config(
-    page_title="板块ETF短线系统（终极版）",
-    layout="centered"
-)
-
-st.title("📊 板块 ETF 短线交易系统（终极版）")
+st.set_page_config(page_title="板块ETF短线系统（封版）", layout="centered")
+st.title("📊 A股板块 ETF 短线系统（TuShare 封版）")
 
 if is_close_mode:
-    st.warning("🕒 当前为 **14:45 收盘确认模式（可执行）**")
+    st.warning("🕒 14:45 收盘确认模式（信号可执行）")
 else:
-    st.info("ℹ️ 盘中观察模式（不建议下单）")
+    st.info("ℹ️ 盘中观察模式（不执行）")
 
 # ======================
-# 数据获取
+# TuShare 数据函数
 # ======================
-def load_data(code, period="3mo"):
+def load_data(ts_code, start_date="20240101"):
     try:
-        df = yf.download(code, period=period, interval="1d", progress=False)
+        df = pro.fund_daily(ts_code=ts_code, start_date=start_date)
         if df is None or df.empty:
             return None
-        df = df.reset_index()
-        df.rename(columns={"Close": "close"}, inplace=True)
+        df = df.sort_values("trade_date")
+        df.rename(columns={"vol": "Volume"}, inplace=True)
+        df.reset_index(drop=True, inplace=True)
         return df
     except:
         return None
@@ -63,14 +63,16 @@ def add_indicators(df):
     high_n = df["close"].rolling(9).max()
     rsv = (df["close"] - low_n) / (high_n - low_n) * 100
     df["kdj_k"] = rsv.ewm(com=2).mean()
-
     return df
 
 # ======================
-# 大盘过滤
+# 大盘过滤器
 # ======================
 def load_market():
-    for name, code in [("沪深300", "000300.SS"), ("上证指数", "000001.SS")]:
+    for name, code in [
+        ("沪深300", "000300.SH"),
+        ("上证指数", "000001.SH")
+    ]:
         df = load_data(code)
         if df is not None and len(df) >= 30:
             return name, add_indicators(df)
@@ -79,7 +81,7 @@ def load_market():
 market_name, market_df = load_market()
 
 if market_df is None:
-    st.error("❌ 大盘数据失败，停止运行")
+    st.error("❌ 大盘数据获取失败，今日停止交易")
     st.stop()
 
 m = market_df.iloc[-1]
@@ -94,29 +96,29 @@ market_20d_return = float(
     (market_df["close"].iloc[-1] / market_df["close"].iloc[-21] - 1) * 100
 )
 
-st.subheader("📈 大盘状态")
+st.subheader("📈 大盘环境")
 st.success("🟢 允许交易" if market_ok else "🔴 禁止新开仓")
 
 # ======================
-# ETF 池
+# ETF 池（你确认过的）
 # ======================
 ETF_POOL = {
-    "军工": "512660.SS",
+    "军工": "512660.SH",
     "半导体": "159995.SZ",
     "计算机": "159998.SZ",
     "人工智能": "159819.SZ",
     "新能源": "159806.SZ",
-    "医药": "512010.SS",
+    "医药": "512010.SH",
     "科创成长": "159218.SZ",
-    "机器人": "562500.SS",
+    "机器人": "562500.SH",
     "主题A": "159732.SZ",
-    "主题B": "515880.SS",
+    "主题B": "515880.SH",
 }
 
 results = []
 
 # ======================
-# 主逻辑
+# 主策略逻辑
 # ======================
 for name, code in ETF_POOL.items():
     df = load_data(code)
@@ -124,23 +126,20 @@ for name, code in ETF_POOL.items():
         continue
 
     df = add_indicators(df)
-
-    l = df.iloc[-1]
-    p = df.iloc[-2]
-    p20 = df.iloc[-21]
+    l, p, p20 = df.iloc[-1], df.iloc[-2], df.iloc[-21]
 
     try:
         price = float(l["close"])
         ma20 = float(l["ma20"])
-        ma20_slope = float(l["ma20_slope"])
-        etf_20d_return = float((price / float(p20["close"]) - 1) * 100)
+        slope = float(l["ma20_slope"])
+        ret20 = float((price / float(p20["close"]) - 1) * 100)
     except:
         continue
 
-    if np.isnan(ma20) or np.isnan(ma20_slope):
+    if np.isnan(ma20) or np.isnan(slope):
         continue
 
-    strength = etf_20d_return - market_20d_return + ma20_slope
+    strength = ret20 - market_20d_return + slope
 
     macd_ok = float(l["macd"]) > float(l["signal"])
     macd_keep = float(p["macd"]) > float(p["signal"])
@@ -159,35 +158,39 @@ for name, code in ETF_POOL.items():
     if is_close_mode and allow_buy:
         action = "🟢 买入"
     elif not market_ok:
-        action = "🔴 卖出 / 空仓"
+        action = "🔴 空仓 / 卖出"
     else:
         action = "🟡 等待"
 
     results.append({
-        "ETF": name,
-        "代码": code.replace(".SS", "").replace(".SZ", ""),
+        "板块": name,
+        "ETF代码": code,
         "强度": round(strength, 2),
         "操作": action
     })
 
 # ======================
-# 结果展示（再保险一次）
+# 结果展示
 # ======================
 df_res = pd.DataFrame(results)
 
 if df_res.empty:
-    st.warning("⚠️ 今日无符合条件的 ETF")
+    st.warning("⚠️ 今日无符合条件的板块")
     st.stop()
 
 df_res["强度"] = pd.to_numeric(df_res["强度"], errors="coerce")
-df_res = df_res.dropna(subset=["强度"])
-df_res = df_res.sort_values(by="强度", ascending=False)
+df_res = df_res.dropna().sort_values("强度", ascending=False)
 
-st.subheader("🔥 Top 3 强度 ETF")
+st.subheader("🔥 今日最强 Top 3 板块 ETF")
 st.dataframe(df_res.head(3), use_container_width=True)
 
-st.subheader("📋 全部 ETF 信号")
+st.subheader("📋 全部板块信号")
 st.dataframe(df_res, use_container_width=True)
 
-st.subheader("📊 实盘统计（结构已预留）")
-st.info("买入 → 下一次卖出，自动统计胜率（后续扩展）")
+st.subheader("📌 执行纪律")
+st.markdown("""
+- 仅 14:45 后执行  
+- Top3 以内优先  
+- 大盘不允许 → 全部放弃  
+- 连续 30 天不改规则
+""")
